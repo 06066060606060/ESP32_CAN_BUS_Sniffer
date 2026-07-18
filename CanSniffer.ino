@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <SPIFFS.h>
 #include "driver/twai.h"
 
 // AtomS3 mini + Atomic CAN Base CA-IS3050G
@@ -8,6 +9,17 @@
 #define CAN_RX_PIN  6
 
 bool twaiStarted = false;
+
+// ===== Log persistant sur SPIFFS =====
+const char* LOG_FILE_PATH = "/can_log.txt";
+bool spiffsOk = false;
+
+String pendingBuffer;              // lignes pas encore écrites sur la flash
+int pendingLines = 0;
+unsigned long lastFlushMillis = 0;
+const unsigned long LOG_FLUSH_INTERVAL_MS = 1000;   // écrit au moins 1x/seconde
+const int LOG_FLUSH_LINE_THRESHOLD = 20;            // ou dès que 20 lignes sont en attente
+const size_t MAX_LOG_FILE_SIZE = 900000;            // ~900 Ko, à ajuster selon le schéma de partition SPIFFS choisi
 
 // ===== Point d'accès WiFi =====
 const char* AP_SSID = "AtomS3-CAN";
@@ -21,10 +33,55 @@ String canLines[MAX_LINES];
 int canWriteIndex = 0;
 int canCount = 0;
 
+bool initSPIFFS() {
+  // true = formate automatiquement si le système de fichiers est absent/corrompu
+  return SPIFFS.begin(true);
+}
+
+void flushLogToSPIFFS(bool force) {
+  if (!spiffsOk) return;
+  if (pendingBuffer.length() == 0) return;
+
+  bool timeToFlush = force ||
+                      pendingLines >= LOG_FLUSH_LINE_THRESHOLD ||
+                      (millis() - lastFlushMillis) >= LOG_FLUSH_INTERVAL_MS;
+  if (!timeToFlush) return;
+
+  File f = SPIFFS.open(LOG_FILE_PATH, FILE_APPEND);
+  if (f) {
+    f.print(pendingBuffer);
+    f.close();
+  }
+  pendingBuffer = "";
+  pendingLines = 0;
+  lastFlushMillis = millis();
+
+  // Garde-fou anti-saturation de la flash : repart de zéro si le fichier devient trop gros
+  File check = SPIFFS.open(LOG_FILE_PATH, FILE_READ);
+  if (check) {
+    size_t sz = check.size();
+    check.close();
+    if (sz > MAX_LOG_FILE_SIZE) {
+      SPIFFS.remove(LOG_FILE_PATH);
+      File nf = SPIFFS.open(LOG_FILE_PATH, FILE_APPEND);
+      if (nf) {
+        nf.println("=== Log précédent supprimé (taille max atteinte), redémarrage du log ===");
+        nf.close();
+      }
+    }
+  }
+}
+
 void addCanLine(const String& line) {
   canLines[canWriteIndex] = line;
   canWriteIndex = (canWriteIndex + 1) % MAX_LINES;
   if (canCount < MAX_LINES) canCount++;
+
+  // Ajoute aussi la ligne au buffer d'écriture persistant (SPIFFS)
+  pendingBuffer += line;
+  pendingBuffer += "\n";
+  pendingLines++;
+  flushLogToSPIFFS(false);
 }
 
 String getCanLog() {
@@ -91,6 +148,33 @@ void handleRoot() {
     .top {
       margin-bottom: 12px;
       color: #8fd3ff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    button {
+      background: #1f7ae0;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: Arial, sans-serif;
+    }
+    button:hover {
+      background: #1662ba;
+    }
+    button.danger {
+      background: #b3261e;
+    }
+    button.danger:hover {
+      background: #8f1e18;
     }
   </style>
 </head>
@@ -101,7 +185,13 @@ void handleRoot() {
   </header>
 
   <div class="wrap">
-    <div class="top">Connecté au WiFi de l'ESP32</div>
+    <div class="top">
+      <span>Connecté au WiFi de l'ESP32</span>
+      <div class="actions">
+        <button id="saveBtn" onclick="saveLog()">💾 Télécharger le log complet</button>
+        <button id="clearBtn" class="danger" onclick="clearLog()">🗑️ Effacer le log</button>
+      </div>
+    </div>
     <pre id="log">Chargement...</pre>
   </div>
 
@@ -113,6 +203,26 @@ void handleRoot() {
         document.getElementById('log').textContent = t;
       } catch (e) {
         document.getElementById('log').textContent = 'Erreur de lecture.';
+      }
+    }
+
+    function saveLog() {
+      // Déclenche le téléchargement du log complet stocké sur SPIFFS (route /download)
+      const a = document.createElement('a');
+      a.href = '/download';
+      a.download = 'can_log.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    async function clearLog() {
+      if (!confirm("Effacer définitivement le log enregistré sur la carte ?")) return;
+      try {
+        await fetch('/clear', { method: 'POST' });
+        refreshLog();
+      } catch (e) {
+        alert('Erreur lors de la suppression du log.');
       }
     }
 
@@ -128,6 +238,39 @@ void handleRoot() {
 
 void handleCan() {
   server.send(200, "text/plain; charset=utf-8", getCanLog());
+}
+
+void handleDownload() {
+  flushLogToSPIFFS(true); // force l'écriture des dernières lignes avant de servir le fichier
+
+  if (!spiffsOk) {
+    server.send(500, "text/plain; charset=utf-8", "SPIFFS indisponible, log complet non accessible.");
+    return;
+  }
+
+  File f = SPIFFS.open(LOG_FILE_PATH, FILE_READ);
+  if (!f) {
+    server.send(200, "text/plain; charset=utf-8", "Aucun log enregistré pour le moment.");
+    return;
+  }
+
+  // Envoie le fichier en tant que téléchargement (attachment) directement depuis la flash
+  server.sendHeader("Content-Disposition", "attachment; filename=can_log.txt");
+  server.streamFile(f, "text/plain; charset=utf-8");
+  f.close();
+}
+
+void handleClearLog() {
+  if (spiffsOk) {
+    SPIFFS.remove(LOG_FILE_PATH);
+  }
+  pendingBuffer = "";
+  pendingLines = 0;
+  canCount = 0;
+  canWriteIndex = 0;
+
+  addCanLine("=== Log effacé par l'utilisateur ===");
+  server.send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void startAccessPoint() {
@@ -148,6 +291,8 @@ void startAccessPoint() {
 void startWebServer() {
   server.on("/", handleRoot);
   server.on("/can", handleCan);
+  server.on("/download", handleDownload);
+  server.on("/clear", HTTP_POST, handleClearLog);
   server.begin();
   addCanLine("Serveur HTTP démarré sur port 80");
 }
@@ -184,7 +329,14 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  spiffsOk = initSPIFFS();
+
   addCanLine("=== HELLO CAN SNIFFER (AtomS3 + CA-IS3050G) ===");
+  if (spiffsOk) {
+    addCanLine("SPIFFS monté, log persistant activé (" + String(LOG_FILE_PATH) + ")");
+  } else {
+    addCanLine("ERREUR: SPIFFS indisponible, log persistant désactivé");
+  }
 
   startAccessPoint();
   startWebServer();
