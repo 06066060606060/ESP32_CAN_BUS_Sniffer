@@ -48,6 +48,7 @@ http://192.168.4.1
 2. Join the `AtomS3-CAN` Wi-Fi network from your phone or laptop.
 3. Open `http://192.168.4.1` in a browser.
 4. Watch incoming CAN frames update on the page.
+5. Download can_log.csv
 
 ## Example CAN output
 
