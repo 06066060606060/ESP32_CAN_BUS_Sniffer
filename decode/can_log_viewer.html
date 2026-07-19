@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CAN Log Viewer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b0d11;
+    --bg-panel:#11161d;
+    --bg-panel-alt:#151b23;
+    --border:#232b36;
+    --text:#e8e8e8;
+    --text-muted:#8fa0b3;
+    --text-faint:#5a6673;
+    --accent:#3b9eff;
+    --accent-dim:#1f5c96;
+    --danger:#e5484d;
+    --success:#3ecf8e;
+    --radius:10px;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Arial, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--font-body);
+    font-size:14px;
+    display:flex;
+    flex-direction:column;
+    height:100vh;
+    overflow:hidden;
+  }
+
+  header{
+    padding:14px 20px;
+    background:var(--bg-panel);
+    border-bottom:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    gap:20px;
+    flex-wrap:wrap;
+  }
+  header h1{
+    font-size:16px;
+    margin:0;
+    font-weight:600;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    white-space:nowrap;
+  }
+  header h1 .dot{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--text-faint);
+    display:inline-block;
+  }
+  header h1 .dot.live{background:var(--success); box-shadow:0 0 8px var(--success);}
+
+  .dropzone{
+    flex:1;
+    min-width:220px;
+    border:1.5px dashed var(--border);
+    border-radius:var(--radius);
+    padding:8px 16px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    color:var(--text-muted);
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+    font-size:13px;
+  }
+  .dropzone:hover, .dropzone.drag{
+    border-color:var(--accent);
+    background:rgba(59,158,255,0.06);
+    color:var(--text);
+  }
+  .dropzone input{display:none;}
+  .dropzone svg{flex-shrink:0;opacity:.8;}
+
+  .stats{
+    display:flex;
+    gap:18px;
+    font-size:12px;
+    color:var(--text-muted);
+    flex-wrap:wrap;
+  }
+  .stats b{color:var(--text); font-variant-numeric: tabular-nums;}
+
+  main{
+    flex:1;
+    display:flex;
+    min-height:0;
+  }
+
+  aside{
+    width:280px;
+    flex-shrink:0;
+    background:var(--bg-panel);
+    border-right:1px solid var(--border);
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+  }
+  aside .side-head{
+    padding:12px 14px 8px;
+    border-bottom:1px solid var(--border);
+  }
+  aside .side-head input[type=text]{
+    width:100%;
+    background:var(--bg);
+    border:1px solid var(--border);
+    color:var(--text);
+    padding:7px 10px;
+    border-radius:8px;
+    font-size:13px;
+    outline:none;
+  }
+  aside .side-head input[type=text]:focus{border-color:var(--accent);}
+  .side-actions{
+    display:flex;
+    gap:6px;
+    margin-top:8px;
+  }
+  .side-actions button{
+    flex:1;
+    font-size:11px;
+    padding:5px 0;
+  }
+  #signalList{
+    flex:1;
+    overflow-y:auto;
+    padding:6px 8px;
+  }
+  .msg-group{margin-bottom:4px;}
+  .msg-group-title{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+    color:var(--text-faint);
+    padding:8px 8px 4px;
+    font-weight:600;
+  }
+  .sig-row{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:6px 8px;
+    border-radius:6px;
+    cursor:pointer;
+    font-size:12.5px;
+  }
+  .sig-row:hover{background:var(--bg-panel-alt);}
+  .sig-row input{accent-color:var(--accent); flex-shrink:0;}
+  .sig-swatch{
+    width:9px;height:9px;border-radius:50%;flex-shrink:0;
+  }
+  .sig-name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text);}
+  .sig-unit{color:var(--text-faint); font-size:11px; flex-shrink:0;}
+
+  section.content{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+    min-height:0;
+  }
+
+  .chart-panel{
+    padding:16px 20px 8px;
+    border-bottom:1px solid var(--border);
+    background:var(--bg-panel);
+  }
+  .chart-panel-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:10px;
+  }
+  .chart-panel-head h2{
+    font-size:13px;
+    margin:0;
+    color:var(--text-muted);
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+  }
+  .chart-wrap{
+    height:320px;
+    position:relative;
+  }
+  .empty-state{
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    color:var(--text-faint);
+    font-size:13px;
+    text-align:center;
+    flex-direction:column;
+    gap:8px;
+  }
+
+  .table-panel{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    padding:12px 20px 16px;
+  }
+  .table-toolbar{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:10px;
+  }
+  .table-toolbar input[type=text]{
+    flex:1;
+    max-width:320px;
+    background:var(--bg-panel);
+    border:1px solid var(--border);
+    color:var(--text);
+    padding:7px 10px;
+    border-radius:8px;
+    font-size:13px;
+    outline:none;
+  }
+  .table-toolbar input[type=text]:focus{border-color:var(--accent);}
+  .table-toolbar .spacer{flex:1;}
+  .table-toolbar select{
+    background:var(--bg-panel);
+    border:1px solid var(--border);
+    color:var(--text);
+    padding:6px 8px;
+    border-radius:8px;
+    font-size:12.5px;
+  }
+
+  .table-scroll{
+    flex:1;
+    overflow:auto;
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+  }
+  table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:12.5px;
+    font-family:var(--font-mono);
+  }
+  thead th{
+    position:sticky;
+    top:0;
+    background:var(--bg-panel-alt);
+    text-align:left;
+    padding:8px 12px;
+    color:var(--text-muted);
+    font-weight:600;
+    border-bottom:1px solid var(--border);
+    cursor:pointer;
+    user-select:none;
+    white-space:nowrap;
+  }
+  thead th:hover{color:var(--text);}
+  thead th .arrow{opacity:.5; font-size:10px; margin-left:4px;}
+  tbody td{
+    padding:6px 12px;
+    border-bottom:1px solid var(--border);
+    white-space:nowrap;
+  }
+  tbody tr:hover{background:var(--bg-panel-alt);}
+  td.num{font-variant-numeric: tabular-nums; text-align:right;}
+  td.msg{color:var(--accent);}
+  td.id{color:var(--text-muted);}
+
+  .pager{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    justify-content:flex-end;
+    padding-top:10px;
+    font-size:12px;
+    color:var(--text-muted);
+  }
+
+  button{
+    background:var(--accent);
+    color:#fff;
+    border:none;
+    border-radius:8px;
+    padding:6px 12px;
+    font-size:12.5px;
+    cursor:pointer;
+    font-family:var(--font-body);
+    transition:background .15s;
+  }
+  button:hover{background:#2b8ceb;}
+  button.ghost{
+    background:transparent;
+    border:1px solid var(--border);
+    color:var(--text-muted);
+  }
+  button.ghost:hover{border-color:var(--accent); color:var(--text); background:transparent;}
+  button:disabled{opacity:.4; cursor:not-allowed;}
+
+  ::-webkit-scrollbar{width:10px; height:10px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:var(--border); border-radius:6px;}
+  ::-webkit-scrollbar-thumb:hover{background:var(--text-faint);}
+
+  @media (max-width: 800px){
+    main{flex-direction:column;}
+    aside{width:100%; height:200px; border-right:none; border-bottom:1px solid var(--border);}
+    header{gap:10px;}
+    .table-toolbar{flex-wrap:wrap;}
+    .table-toolbar input[type=text]{max-width:none; width:100%; order:1;}
+    .table-toolbar .spacer{display:none;}
+    .table-toolbar select{order:2;}
+    .table-toolbar #exportBtn{order:3; white-space:nowrap;}
+    .chart-wrap{height:260px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot" id="statusDot"></span> CAN Log Viewer</h1>
+
+  <label class="dropzone" id="dropzone">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    <span id="dropzoneLabel">Drop your decoded CSV here, or click to browse (timestamp_ms;can_id;message;signal;value;unit)</span>
+    <input type="file" id="fileInput" accept=".csv,.txt">
+  </label>
+
+  <div class="stats" id="stats" style="display:none;">
+    <span>Rows: <b id="statRows">0</b></span>
+    <span>Signals: <b id="statSignals">0</b></span>
+    <span>Messages: <b id="statMessages">0</b></span>
+    <span>Duration: <b id="statDuration">0</b></span>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <div class="side-head">
+      <input type="text" id="signalSearch" placeholder="Filter signals...">
+      <div class="side-actions">
+        <button class="ghost" id="selectAllBtn">Select all</button>
+        <button class="ghost" id="clearAllBtn">Clear</button>
+      </div>
+    </div>
+    <div id="signalList">
+      <div class="empty-state" style="height:200px;">Load a CSV to see available signals</div>
+    </div>
+  </aside>
+
+  <section class="content">
+    <div class="chart-panel">
+      <div class="chart-panel-head">
+        <h2>Signal chart <span id="axisHint" style="text-transform:none; color:var(--text-faint); font-weight:400;"></span></h2>
+        <button class="ghost" id="resetZoomBtn" style="display:none;">Reset zoom</button>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div class="empty-state" id="chartEmpty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18M7 14l3-4 3 3 5-7"/></svg>
+          <div>Select one or more signals from the left panel to plot them here</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-panel">
+      <div class="table-toolbar">
+        <input type="text" id="tableSearch" placeholder="Search message, signal, id or value...">
+        <div class="spacer"></div>
+        <select id="pageSize">
+          <option value="50">50 / page</option>
+          <option value="100" selected>100 / page</option>
+          <option value="250">250 / page</option>
+          <option value="500">500 / page</option>
+        </select>
+        <button class="ghost" id="exportBtn">Export filtered CSV</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th data-key="timestamp_ms">Timestamp (ms) <span class="arrow"></span></th>
+              <th data-key="can_id">CAN ID <span class="arrow"></span></th>
+              <th data-key="message">Message <span class="arrow"></span></th>
+              <th data-key="signal">Signal <span class="arrow"></span></th>
+              <th data-key="value">Value <span class="arrow"></span></th>
+              <th data-key="unit">Unit <span class="arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <tr><td colspan="6" style="text-align:center; color:var(--text-faint); padding:24px;">No data loaded yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span id="pagerInfo">0 rows</span>
+        <button class="ghost" id="prevPageBtn">Prev</button>
+        <button class="ghost" id="nextPageBtn">Next</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  let rows = [];              // {timestamp_ms, can_id, message, signal, value, unit, numeric}
+  let signalMeta = new Map(); // key "message|signal" -> {message, signal, unit, count, numeric}
+  let selectedSignals = new Set();
+  let chart = null;
+  let sortKey = "timestamp_ms";
+  let sortDir = 1;
+  let currentPage = 1;
+  let pageSize = 100;
+
+  const COLOR_PALETTE = [
+    "#3b9eff", "#3ecf8e", "#f5a623", "#e5484d", "#b06bff",
+    "#33c2c2", "#ff7ab6", "#c8d94a", "#6b8cff", "#ff9f5a"
+  ];
+
+  // ---------- DOM refs ----------
+  const fileInput = document.getElementById('fileInput');
+  const dropzone = document.getElementById('dropzone');
+  const dropzoneLabel = document.getElementById('dropzoneLabel');
+  const statusDot = document.getElementById('statusDot');
+  const statsEl = document.getElementById('stats');
+  const signalListEl = document.getElementById('signalList');
+  const signalSearchEl = document.getElementById('signalSearch');
+  const tableBody = document.getElementById('tableBody');
+  const tableSearchEl = document.getElementById('tableSearch');
+  const pagerInfo = document.getElementById('pagerInfo');
+  const chartEmpty = document.getElementById('chartEmpty');
+  const axisHint = document.getElementById('axisHint');
+
+  // ---------- File loading ----------
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag');
+    if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => {
+    if (e.target.files.length) loadFile(e.target.files[0]);
+  });
+
+  function loadFile(file) {
+    dropzoneLabel.textContent = "Loading " + file.name + "...";
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        parseCSV(e.target.result);
+        dropzoneLabel.textContent = file.name + " loaded — drop another file to replace";
+        statusDot.classList.add('live');
+      } catch (err) {
+        dropzoneLabel.textContent = "Error parsing file: " + err.message;
+        statusDot.classList.remove('live');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function detectDelimiter(headerLine) {
+    const candidates = [';', ',', '\t'];
+    let best = ';', bestCount = -1;
+    for (const c of candidates) {
+      const count = headerLine.split(c).length;
+      if (count > bestCount) { bestCount = count; best = c; }
+    }
+    return best;
+  }
+
+  function parseCSV(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length && !l.trim().startsWith('#'));
+    if (!lines.length) throw new Error("Empty file");
+
+    const delim = detectDelimiter(lines[0]);
+    let headerCols = lines[0].split(delim).map(s => s.trim().toLowerCase());
+
+    // Map expected columns; tolerate missing/extra columns and different order
+    const colIndex = {
+      timestamp_ms: headerCols.findIndex(c => c.includes('timestamp')),
+      can_id: headerCols.findIndex(c => c === 'can_id' || c === 'id'),
+      message: headerCols.findIndex(c => c === 'message' || c === 'msg'),
+      signal: headerCols.findIndex(c => c === 'signal'),
+      value: headerCols.findIndex(c => c === 'value'),
+      unit: headerCols.findIndex(c => c === 'unit'),
+    };
+
+    const hasHeader = colIndex.signal !== -1 && colIndex.value !== -1;
+    const startLine = hasHeader ? 1 : 0;
+    if (!hasHeader) {
+      // Fallback to fixed positional order: timestamp_ms;can_id;message;signal;value;unit
+      colIndex.timestamp_ms = 0; colIndex.can_id = 1; colIndex.message = 2;
+      colIndex.signal = 3; colIndex.value = 4; colIndex.unit = 5;
+    }
+
+    const newRows = [];
+    for (let i = startLine; i < lines.length; i++) {
+      const parts = lines[i].split(delim);
+      if (parts.length < 3) continue;
+      const get = (idx) => (idx >= 0 && idx < parts.length) ? parts[idx].trim() : "";
+
+      const tsRaw = get(colIndex.timestamp_ms);
+      const ts = parseFloat(tsRaw);
+      const valueRaw = get(colIndex.value);
+      const numeric = valueRaw !== "" && !isNaN(parseFloat(valueRaw)) && isFinite(valueRaw);
+
+      newRows.push({
+        timestamp_ms: isNaN(ts) ? 0 : ts,
+        can_id: get(colIndex.can_id),
+        message: get(colIndex.message) || "(unknown)",
+        signal: get(colIndex.signal) || "(unknown)",
+        value: valueRaw,
+        valueNum: numeric ? parseFloat(valueRaw) : null,
+        unit: get(colIndex.unit),
+        numeric: numeric
+      });
+    }
+
+    if (!newRows.length) throw new Error("No decodable rows found");
+
+    rows = newRows;
+    rows.sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+    buildSignalMeta();
+    autoSelectDefaults();
+    renderSignalList();
+    updateStats();
+    currentPage = 1;
+    renderTable();
+    updateChart();
+  }
+
+  function buildSignalMeta() {
+    signalMeta = new Map();
+    for (const r of rows) {
+      const key = r.message + "|" + r.signal;
+      if (!signalMeta.has(key)) {
+        signalMeta.set(key, { message: r.message, signal: r.signal, unit: r.unit, count: 0, numeric: false });
+      }
+      const meta = signalMeta.get(key);
+      meta.count++;
+      if (r.numeric) meta.numeric = true;
+      if (!meta.unit && r.unit) meta.unit = r.unit;
+    }
+  }
+
+  function autoSelectDefaults() {
+    selectedSignals = new Set();
+    let n = 0;
+    for (const [key, meta] of signalMeta) {
+      if (meta.numeric && n < 4) { selectedSignals.add(key); n++; }
+    }
+  }
+
+  function colorForIndex(i) {
+    return COLOR_PALETTE[i % COLOR_PALETTE.length];
+  }
+
+  // ---------- Sidebar ----------
+  function renderSignalList() {
+    const filterText = signalSearchEl.value.trim().toLowerCase();
+    const byMessage = new Map();
+    for (const [key, meta] of signalMeta) {
+      if (filterText && !(meta.message + " " + meta.signal).toLowerCase().includes(filterText)) continue;
+      if (!byMessage.has(meta.message)) byMessage.set(meta.message, []);
+      byMessage.get(meta.message).push([key, meta]);
+    }
+
+    if (byMessage.size === 0) {
+      signalListEl.innerHTML = '<div class="empty-state" style="height:200px;">No matching signals</div>';
+      return;
+    }
+
+    let html = "";
+    const sortedKeys = [...signalMeta.keys()];
+    for (const [message, sigs] of byMessage) {
+      html += `<div class="msg-group"><div class="msg-group-title">${escapeHtml(message)}</div>`;
+      sigs.sort((a, b) => a[1].signal.localeCompare(b[1].signal));
+      for (const [key, meta] of sigs) {
+        const idx = sortedKeys.indexOf(key);
+        const color = meta.numeric ? colorForIndex(idx) : "#3a4552";
+        const checked = selectedSignals.has(key) ? "checked" : "";
+        html += `<label class="sig-row">
+          <input type="checkbox" data-key="${escapeHtml(key)}" ${checked} ${meta.numeric ? "" : "disabled"}>
+          <span class="sig-swatch" style="background:${color}"></span>
+          <span class="sig-name" title="${escapeHtml(meta.signal)}">${escapeHtml(meta.signal)}</span>
+          <span class="sig-unit">${escapeHtml(meta.unit || (meta.numeric ? "" : "text"))}</span>
+        </label>`;
+      }
+      html += `</div>`;
+    }
+    signalListEl.innerHTML = html;
+
+    signalListEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const key = cb.getAttribute('data-key');
+        if (cb.checked) selectedSignals.add(key); else selectedSignals.delete(key);
+        updateChart();
+      });
+    });
+  }
+
+  signalSearchEl.addEventListener('input', renderSignalList);
+
+  document.getElementById('selectAllBtn').addEventListener('click', () => {
+    const filterText = signalSearchEl.value.trim().toLowerCase();
+    for (const [key, meta] of signalMeta) {
+      if (!meta.numeric) continue;
+      if (filterText && !(meta.message + " " + meta.signal).toLowerCase().includes(filterText)) continue;
+      selectedSignals.add(key);
+    }
+    renderSignalList();
+    updateChart();
+  });
+
+  document.getElementById('clearAllBtn').addEventListener('click', () => {
+    selectedSignals.clear();
+    renderSignalList();
+    updateChart();
+  });
+
+  // ---------- Chart ----------
+  function updateChart() {
+    const keys = [...signalMeta.keys()];
+
+    if (selectedSignals.size === 0) {
+      chartEmpty.style.display = 'flex';
+      document.getElementById('chart').style.display = 'none';
+      axisHint.textContent = "";
+      if (chart) { chart.destroy(); chart = null; }
+      return;
+    }
+
+    chartEmpty.style.display = 'none';
+    document.getElementById('chart').style.display = 'block';
+
+    // Assign axes by unit (max 3 distinct axes to avoid clutter)
+    const unitsInOrder = [];
+    for (const key of selectedSignals) {
+      const meta = signalMeta.get(key);
+      const unit = meta.unit || "value";
+      if (!unitsInOrder.includes(unit)) unitsInOrder.push(unit);
+    }
+    const maxAxes = 3;
+    const axisForUnit = {};
+    unitsInOrder.forEach((u, i) => { axisForUnit[u] = 'y' + Math.min(i, maxAxes - 1); });
+
+    if (unitsInOrder.length > 1) {
+      axisHint.textContent = "— " + unitsInOrder.slice(0, maxAxes).join(" / ") + (unitsInOrder.length > maxAxes ? " (+more sharing last axis)" : "");
+    } else {
+      axisHint.textContent = unitsInOrder[0] ? "— " + unitsInOrder[0] : "";
+    }
+
+    const datasets = [];
+    let idx = 0;
+    for (const key of selectedSignals) {
+      const meta = signalMeta.get(key);
+      const data = rows
+        .filter(r => r.message === meta.message && r.signal === meta.signal && r.numeric)
+        .map(r => ({ x: r.timestamp_ms, y: r.valueNum }));
+      const colorIdx = keys.indexOf(key);
+      datasets.push({
+        label: meta.signal + (meta.unit ? " (" + meta.unit + ")" : ""),
+        data: data,
+        borderColor: colorForIndex(colorIdx),
+        backgroundColor: colorForIndex(colorIdx),
+        borderWidth: 1.75,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.15,
+        yAxisID: axisForUnit[meta.unit || "value"],
+        parsing: false
+      });
+      idx++;
+    }
+
+    const scales = {
+      x: {
+        type: 'linear',
+        title: { display: true, text: 'Timestamp (ms)', color: '#8fa0b3' },
+        ticks: { color: '#8fa0b3', font: { size: 11 } },
+        grid: { color: '#1c232c' }
+      }
+    };
+    unitsInOrder.slice(0, maxAxes).forEach((u, i) => {
+      scales['y' + i] = {
+        type: 'linear',
+        position: i === 0 ? 'left' : 'right',
+        title: { display: true, text: u, color: '#8fa0b3' },
+        ticks: { color: '#8fa0b3', font: { size: 11 } },
+        grid: { color: i === 0 ? '#1c232c' : 'transparent', drawOnChartArea: i === 0 }
+      };
+    });
+
+    const cfg = {
+      type: 'line',
+      data: { datasets },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { color: '#c9d3dc', boxWidth: 10, font: { size: 11 } } },
+          tooltip: {
+            backgroundColor: '#151b23',
+            borderColor: '#2c3440',
+            borderWidth: 1,
+            titleColor: '#e8e8e8',
+            bodyColor: '#c9d3dc',
+            padding: 10
+          }
+        },
+        scales: scales
+      }
+    };
+
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart'), cfg);
+  }
+
+  // ---------- Table ----------
+  function getFilteredSortedRows() {
+    const q = tableSearchEl.value.trim().toLowerCase();
+    let filtered = rows;
+    if (q) {
+      filtered = rows.filter(r =>
+        r.message.toLowerCase().includes(q) ||
+        r.signal.toLowerCase().includes(q) ||
+        (r.can_id || "").toLowerCase().includes(q) ||
+        String(r.value).toLowerCase().includes(q)
+      );
+    }
+    filtered = filtered.slice().sort((a, b) => {
+      let av = a[sortKey], bv = b[sortKey];
+      if (sortKey === 'value') { av = a.numeric ? a.valueNum : a.value; bv = b.numeric ? b.valueNum : b.value; }
+      if (typeof av === 'string') av = av.toLowerCase();
+      if (typeof bv === 'string') bv = bv.toLowerCase();
+      if (av < bv) return -1 * sortDir;
+      if (av > bv) return 1 * sortDir;
+      return 0;
+    });
+    return filtered;
+  }
+
+  function renderTable() {
+    const filtered = getFilteredSortedRows();
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    if (currentPage > totalPages) currentPage = totalPages;
+    const start = (currentPage - 1) * pageSize;
+    const pageRows = filtered.slice(start, start + pageSize);
+
+    if (!pageRows.length) {
+      tableBody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-faint); padding:24px;">No matching rows</td></tr>';
+    } else {
+      tableBody.innerHTML = pageRows.map(r => `
+        <tr>
+          <td class="num">${r.timestamp_ms}</td>
+          <td class="id">${escapeHtml(r.can_id)}</td>
+          <td class="msg">${escapeHtml(r.message)}</td>
+          <td>${escapeHtml(r.signal)}</td>
+          <td class="num">${escapeHtml(String(r.value))}</td>
+          <td>${escapeHtml(r.unit)}</td>
+        </tr>`).join('');
+    }
+
+    pagerInfo.textContent = `${filtered.length} rows — page ${currentPage} / ${totalPages}`;
+    document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+    document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+  }
+
+  tableSearchEl.addEventListener('input', () => { currentPage = 1; renderTable(); });
+  document.getElementById('pageSize').addEventListener('change', e => {
+    pageSize = parseInt(e.target.value, 10);
+    currentPage = 1;
+    renderTable();
+  });
+  document.getElementById('prevPageBtn').addEventListener('click', () => { currentPage--; renderTable(); });
+  document.getElementById('nextPageBtn').addEventListener('click', () => { currentPage++; renderTable(); });
+
+  document.querySelectorAll('thead th').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.getAttribute('data-key');
+      if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = 1; }
+      document.querySelectorAll('thead .arrow').forEach(a => a.textContent = '');
+      th.querySelector('.arrow').textContent = sortDir === 1 ? '▲' : '▼';
+      renderTable();
+    });
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    const filtered = getFilteredSortedRows();
+    let csv = "timestamp_ms;can_id;message;signal;value;unit\n";
+    csv += filtered.map(r => [r.timestamp_ms, r.can_id, r.message, r.signal, r.value, r.unit].join(';')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'can_log_filtered.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+
+  // ---------- Stats ----------
+  function updateStats() {
+    statsEl.style.display = 'flex';
+    document.getElementById('statRows').textContent = rows.length.toLocaleString();
+    document.getElementById('statSignals').textContent = signalMeta.size;
+    document.getElementById('statMessages').textContent = new Set([...signalMeta.values()].map(m => m.message)).size;
+    const minTs = rows[0].timestamp_ms;
+    const maxTs = rows[rows.length - 1].timestamp_ms;
+    document.getElementById('statDuration').textContent = ((maxTs - minTs) / 1000).toFixed(2) + " s";
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+})();
+</script>
+</body>
+</html>
