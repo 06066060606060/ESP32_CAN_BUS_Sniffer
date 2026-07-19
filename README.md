@@ -50,12 +50,19 @@ http://192.168.4.1
 4. Watch incoming CAN frames update on the page.
 5. Download can_log.csv
 
-## Example CAN output
+## Example CAN output in web interface
 
 ```text
 RX: ID 0x123 (STD) DATA DLC 8 Data: 10 22 F1 90 00 00 00 00
 RX: ID 0x456 (EXT) DATA DLC 4 Data: 01 02 03 04
 RX: ID 0x7DF (STD) RTR DLC 0 Data:
+```
+
+## Example CAN output in log file
+```text
+timestamp_ms;id;extended;rtr;dlc;data
+1523;0x1A0;0;0;8;12 3A FF 00 00 00 07 E1
+2011;0x201;1;0;4;00 FF 12 34
 ```
 
 ## Main configuration points
