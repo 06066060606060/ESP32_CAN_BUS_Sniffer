@@ -12,7 +12,9 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Embedded web server on port 80.
 - Live browser view of recent CAN frames.
 - Simple single-file Arduino sketch, easy to modify.
+- 
 - Python script to decodes a CAN log CSV file using a DBC file and exports the decoded signals to a new CSV file.
+- Html viewer (work in progress)
 
 ## Wiring
 
