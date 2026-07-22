@@ -13,7 +13,7 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Live browser view of recent CAN frames.
 - Simple single-file Arduino sketch, easy to modify.
 - 
-- Python script to decodes a CAN log CSV file using a DBC file and exports the decoded signals to a new CSV file.
+- Python script to decodes a CAN log CSV file using a dbc and Tesla CAN Explorer json and exports the decoded signals to a new CSV file.
 - Html viewer (work in progress)
 
   ##
@@ -90,4 +90,5 @@ You may want to adapt these settings:
 - Make sure your CAN bus bitrate matches the firmware configuration.
 - The web page shows recent frames only; it is not a long-term logger.
 
-
+## Credits
+decoded Tesla CAN frame: https://github.com/bruvv/tesla-can-explorer
