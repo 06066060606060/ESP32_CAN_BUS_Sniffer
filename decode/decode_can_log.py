@@ -64,6 +64,7 @@ def main():
     total_frames = 0
     decoded_frames = 0
     unknown_ids = set()
+    unknown_frames = 0
     decode_errors = 0
 
     with open(args.csv, "r", encoding="utf-8", errors="replace") as f:
@@ -95,10 +96,31 @@ def main():
                 decode_errors += 1
                 continue
 
+            # Extended CAN IDs (29-bit, e.g. 0x7E10824) are stored separately from
+            # standard IDs (11-bit, max 0x7FF) inside cantools. If we don't tell it
+            # which kind of frame this is, a valid extended ID that IS in the DBC
+            # will still raise KeyError and be wrongly marked as unknown.
+            is_extended = extended.strip() == "1"
+            message = None
             try:
-                message = db.get_message_by_frame_id(frame_id)
+                message = db.get_message_by_frame_id(frame_id, force_extended_id=is_extended)
             except KeyError:
+                try:
+                    # Fall back to the opposite frame type in case the 'extended'
+                    # column in the log doesn't match how the DBC defines it.
+                    message = db.get_message_by_frame_id(frame_id, force_extended_id=not is_extended)
+                except KeyError:
+                    pass
+
+            if message is None:
+                # ID not present in the DBC: keep the raw frame instead of dropping it,
+                # so unidentified traffic is still visible in the output.
                 unknown_ids.add(id_str.strip())
+                unknown_frames += 1
+                raw_hex = data.hex(" ").upper()
+                decoded_rows.append(
+                    (timestamp_ms, id_str.strip(), "UNKNOWN", "RAW_DATA", raw_hex, "hex")
+                )
                 continue
 
             try:
@@ -121,7 +143,7 @@ def main():
     print(f"Total frames read       : {total_frames}")
     print(f"Frames decoded          : {decoded_frames}")
     print(f"Decode errors           : {decode_errors}")
-    print(f"Unknown IDs (not in DBC): {len(unknown_ids)}")
+    print(f"Unknown IDs (not in DBC): {len(unknown_ids)} ({unknown_frames} frames kept as raw data)")
     if unknown_ids:
         sample = sorted(list(unknown_ids))[:15]
         print(f"  e.g. {', '.join(sample)}")
