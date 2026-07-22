@@ -1,6 +1,6 @@
 # ESP32 CAN BUS Sniffer
 
-An ESP32-S3 CAN bus sniffer, exposing captured TWAI/CAN frames through a built-in Wi-Fi access point and a live web interface.
+An ESP32-S3 CAN bus sniffer for Tesla, exposing captured TWAI/CAN frames through a built-in Wi-Fi access point and a live web interface.
 
 This project is designed for **listen-only** CAN monitoring, so it can observe traffic without transmitting frames onto the bus.
 
