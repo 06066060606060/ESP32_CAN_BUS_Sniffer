@@ -16,6 +16,11 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Python script to decodes a CAN log CSV file using a DBC file and exports the decoded signals to a new CSV file.
 - Html viewer (work in progress)
 
+  ##
+
+<img width="1408" height="809" alt="log viewer" src="https://github.com/06066060606060/ESP32_CAN_BUS_Sniffer/blob/main/decode/log%20viewer.jpg" />
+
+
 ## Wiring
 
 This sketch uses the following pins:
@@ -85,4 +90,4 @@ You may want to adapt these settings:
 - Make sure your CAN bus bitrate matches the firmware configuration.
 - The web page shows recent frames only; it is not a long-term logger.
 
-  
+
