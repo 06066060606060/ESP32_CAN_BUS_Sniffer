@@ -54,7 +54,7 @@ http://192.168.4.1
 
 ## Usage
 
-1. Power the ESP32 and connect it to the CAN transceiver base.
+1. Power the ESP32.
 2. Join the `AtomS3-CAN` Wi-Fi network from your phone or laptop.
 3. Open `http://192.168.4.1` in a browser.
 4. Watch incoming CAN frames update on the page.
