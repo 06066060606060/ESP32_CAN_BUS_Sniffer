@@ -12,7 +12,11 @@ bool twaiStarted = false;
 
 // ===== Persistent log on SPIFFS (CSV format) =====
 const char* LOG_FILE_PATH = "/can_log.csv";
-const char* CSV_HEADER = "timestamp_ms;id;extended;rtr;dlc;data";
+// NOTE: 'data' = the dlc bytes reported by the controller (unchanged).
+// 'raw8' = ALL 8 bytes of the RX buffer, ALWAYS, regardless of dlc.
+// This exposes any bytes the module transmits beyond the declared dlc
+// (useful to crack checksums that cover hidden bytes, e.g. 0x249).
+const char* CSV_HEADER = "timestamp_ms;id;extended;rtr;dlc;data;raw8";
 bool spiffsOk = false;
 
 String pendingBuffer;              // lines not yet written to flash
@@ -20,13 +24,18 @@ int pendingLines = 0;
 unsigned long lastFlushMillis = 0;
 const unsigned long LOG_FLUSH_INTERVAL_MS = 1000;   // flush at least once per second
 const int LOG_FLUSH_LINE_THRESHOLD = 20;            // or as soon as 20 lines are pending
-const size_t MAX_LOG_FILE_SIZE = 900000;            // ~900 KB, adjust based on the chosen SPIFFS partition scheme
+const size_t MAX_LOG_FILE_SIZE = 2500000; 
 
 // ===== WiFi access point =====
 const char* AP_SSID = "AtomS3-CAN";
 const char* AP_PASS = "12345678";   // min 8 characters for WPA2
 
 WebServer server(80);
+
+// ===== CAN ID software filter =====
+// Default: log only CAN ID 0x370. Set logAllCanIds=true to accept everything.
+uint32_t canFilterId = 0x370;
+bool logAllCanIds = false;
 
 // Buffer of the latest CAN lines
 static const int MAX_LINES = 150;
@@ -99,12 +108,44 @@ void addCanLine(const String& line) {
   flushLogToSPIFFS(false);
 }
 
+// Parse a CAN ID entered from the dashboard (accepts 0x370 or 370).
+bool parseCanId(String value, uint32_t &id) {
+  value.trim();
+  if (value.length() == 0) return false;
+
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    value = value.substring(2);
+  }
+  if (value.length() == 0) return false;
+
+  char *endPtr = nullptr;
+  unsigned long parsed = strtoul(value.c_str(), &endPtr, 16);
+  if (endPtr == value.c_str() || *endPtr != '\0') return false;
+
+  // Allow both standard (11-bit) and extended (29-bit) CAN IDs.
+  if (parsed > 0x1FFFFFFFUL) return false;
+
+  id = (uint32_t)parsed;
+  return true;
+}
+
+String getFilterDescription() {
+  if (logAllCanIds) return "ALL CAN IDs";
+  return "0x" + String(canFilterId, HEX);
+}
+
 // Received CAN frame: shown live in readable text, and written as a CSV row in the persistent file
 void addCanFrame(uint32_t id, bool extd, bool rtr, uint8_t dlc, const uint8_t* data) {
+  // Software filter: only frames matching the selected ID reach the dashboard
+  // buffer and persistent CSV log.
+  if (!logAllCanIds && id != canFilterId) {
+    return;
+  }
+
   unsigned long ts = millis();
 
   // --- Readable line for the live web display (RAM buffer) ---
-  char line[140];
+  char line[200];
   int pos = 0;
   pos += snprintf(line + pos, sizeof(line) - pos, "RX: ID 0x%lX ", (unsigned long)id);
   pos += snprintf(line + pos, sizeof(line) - pos, "%s ", extd ? "(EXT)" : "(STD)");
@@ -115,20 +156,33 @@ void addCanFrame(uint32_t id, bool extd, bool rtr, uint8_t dlc, const uint8_t* d
       pos += snprintf(line + pos, sizeof(line) - pos, " %02X", data[i]);
     }
   }
+  // Also show the full 8-byte raw buffer live (reveals bytes beyond dlc)
+  pos += snprintf(line + pos, sizeof(line) - pos, "  | raw8:");
+  for (int i = 0; i < 8 && pos < (int)sizeof(line) - 4; i++) {
+    pos += snprintf(line + pos, sizeof(line) - pos, " %02X", data[i]);
+  }
 
   canLines[canWriteIndex] = String(line);
   canWriteIndex = (canWriteIndex + 1) % MAX_LINES;
   if (canCount < MAX_LINES) canCount++;
 
-  // --- CSV row for the persistent log: timestamp_ms;id;extended;rtr;dlc;data ---
-  char csvLine[160];
+  // --- CSV row for the persistent log: timestamp_ms;id;extended;rtr;dlc;data;raw8 ---
+  char csvLine[220];
   int cpos = 0;
   cpos += snprintf(csvLine + cpos, sizeof(csvLine) - cpos, "%lu;0x%lX;%d;%d;%d;",
                     ts, (unsigned long)id, extd ? 1 : 0, rtr ? 1 : 0, dlc);
+  // 'data' column: the dlc bytes only (unchanged, backward compatible)
   if (!rtr) {
     for (int i = 0; i < dlc && cpos < (int)sizeof(csvLine) - 4; i++) {
       cpos += snprintf(csvLine + cpos, sizeof(csvLine) - cpos, i > 0 ? " %02X" : "%02X", data[i]);
     }
+  }
+  // 'raw8' column: ALWAYS all 8 buffer bytes, even beyond dlc, even for RTR.
+  // The TWAI driver copies a full 8-byte data[] regardless of dlc, so this
+  // reveals hidden bytes that the checksum may depend on.
+  cpos += snprintf(csvLine + cpos, sizeof(csvLine) - cpos, ";");
+  for (int i = 0; i < 8 && cpos < (int)sizeof(csvLine) - 4; i++) {
+    cpos += snprintf(csvLine + cpos, sizeof(csvLine) - cpos, i > 0 ? " %02X" : "%02X", data[i]);
   }
 
   pendingBuffer += csvLine;
@@ -153,6 +207,44 @@ String getCanLog() {
   }
 
   return out;
+}
+
+void handleFilter() {
+  bool allIds = server.hasArg("all") && server.arg("all") == "1";
+
+  if (allIds) {
+    logAllCanIds = true;
+    addCanLine("=== CAN filter: ALL IDs ===");
+    server.send(200, "text/plain; charset=utf-8", "ALL");
+    return;
+  }
+
+  if (!server.hasArg("id")) {
+    server.send(400, "text/plain; charset=utf-8", "Missing CAN ID.");
+    return;
+  }
+
+  String idText = server.arg("id");
+  uint32_t parsedId = 0;
+  if (!parseCanId(idText, parsedId)) {
+    server.send(400, "text/plain; charset=utf-8", "Invalid CAN ID. Use e.g. 0x370 or 370.");
+    return;
+  }
+
+  canFilterId = parsedId;
+  logAllCanIds = false;
+
+  String msg = "=== CAN filter changed to 0x" + String(canFilterId, HEX) + " ===";
+  msg.toUpperCase();
+  addCanLine(msg);
+
+  server.send(200, "text/plain; charset=utf-8", String(canFilterId, HEX));
+}
+
+void handleFilterStatus() {
+  String json = "{\"all\":" + String(logAllCanIds ? "true" : "false") +
+                ",\"id\":\"0x" + String(canFilterId, HEX) + "\"}";
+  server.send(200, "application/json; charset=utf-8", json);
 }
 
 void handleRoot() {
@@ -210,6 +302,49 @@ void handleRoot() {
       display: flex;
       gap: 8px;
     }
+    .filterBox {
+      background: #171a21;
+      border: 1px solid #2c3440;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .filterTitle {
+      color: #8fd3ff;
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .filterRow {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    input[type="text"] {
+      background: #11161d;
+      color: #e8e8e8;
+      border: 1px solid #46515f;
+      border-radius: 8px;
+      padding: 8px 10px;
+      width: 130px;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    .checkLabel {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #c7d2df;
+      font-size: 13px;
+      margin-left: 6px;
+    }
+    .filterStatus {
+      margin-top: 8px;
+      color: #9fb0c3;
+      font-size: 12px;
+    }
     button {
       background: #1f7ae0;
       color: #fff;
@@ -245,10 +380,84 @@ void handleRoot() {
         <button id="clearBtn" class="danger" onclick="clearLog()">🗑️ Clear log</button>
       </div>
     </div>
+
+    <div class="filterBox">
+      <div class="filterTitle">CAN ID filter</div>
+      <div class="filterRow">
+        <input id="canIdInput" type="text" value="0x370" placeholder="0x370" spellcheck="false">
+        <button onclick="applyFilter()">Apply filter</button>
+        <label class="checkLabel">
+          <input id="allIds" type="checkbox" onchange="toggleAllIds()">
+          Log all CAN IDs
+        </label>
+      </div>
+      <div class="filterStatus">Current filter: <span id="filterStatus">Loading...</span></div>
+    </div>
+
     <pre id="log">Loading...</pre>
   </div>
 
   <script>
+    async function refreshFilterStatus() {
+      try {
+        const r = await fetch('/filter/status');
+        const s = await r.json();
+        document.getElementById('allIds').checked = s.all;
+        document.getElementById('canIdInput').disabled = s.all;
+        document.getElementById('filterStatus').textContent = s.all ? 'ALL CAN IDs' : s.id;
+        if (!s.all) document.getElementById('canIdInput').value = s.id;
+      } catch (e) {
+        document.getElementById('filterStatus').textContent = 'Read error';
+      }
+    }
+
+    async function applyFilter() {
+      const id = document.getElementById('canIdInput').value.trim();
+      try {
+        const r = await fetch('/filter?id=' + encodeURIComponent(id), { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          alert(t);
+          return;
+        }
+        document.getElementById('allIds').checked = false;
+        document.getElementById('canIdInput').disabled = false;
+        document.getElementById('filterStatus').textContent = '0x' + t.toUpperCase();
+        refreshLog();
+      } catch (e) {
+        alert('Error while applying CAN ID filter.');
+      }
+    }
+
+    async function toggleAllIds() {
+      const checked = document.getElementById('allIds').checked;
+      if (!checked) {
+        // Restore the ID currently entered in the field.
+        applyFilter();
+        return;
+      }
+
+      try {
+        const r = await fetch('/filter?all=1', { method: 'POST' });
+        const t = await r.text();
+        if (!r.ok) {
+          alert(t);
+          document.getElementById('allIds').checked = false;
+          return;
+        }
+        document.getElementById('canIdInput').disabled = true;
+        document.getElementById('filterStatus').textContent = 'ALL CAN IDs';
+        refreshLog();
+      } catch (e) {
+        alert('Error while changing CAN ID filter.');
+        document.getElementById('allIds').checked = false;
+      }
+    }
+
+    document.getElementById('canIdInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') applyFilter();
+    });
+
     async function refreshLog() {
       try {
         const r = await fetch('/can');
@@ -347,6 +556,8 @@ void startWebServer() {
   server.on("/can", handleCan);
   server.on("/download", handleDownload);
   server.on("/clear", HTTP_POST, handleClearLog);
+  server.on("/filter", HTTP_POST, handleFilter);
+  server.on("/filter/status", handleFilterStatus);
   server.begin();
   addCanLine("HTTP server started on port 80");
 }
@@ -377,6 +588,13 @@ void startTWAI() {
 
   twaiStarted = true;
   addCanLine("TWAI listen-only started at 500 kbit/s (TX=5, RX=6)");
+  if (logAllCanIds) {
+    addCanLine("CAN filter: ALL IDs");
+  } else {
+    String filterMsg = "CAN filter: 0x" + String(canFilterId, HEX);
+    filterMsg.toUpperCase();
+    addCanLine(filterMsg);
+  }
 }
 
 void setup() {
