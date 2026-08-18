@@ -13,7 +13,7 @@ firmware output:
 Lines starting with '#' (comments/status messages) are ignored.
 
 Usage:
-    python decode_can_log.py --dbc Model3CAN.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv LOG.csv --out decoded.csv
+    python decode_can_log.py --dbc mycar.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv can_log.csv --out decoded.csv
 
 Output CSV (long format, one row per decoded signal — safer than a wide
 table since different messages have different signals):
@@ -98,6 +98,7 @@ def main():
             "recognize; their signal values are still kept as raw hex."
         ),
     )
+    parser.add_argument( "--filter", default=None, help="Only output frames with these CAN IDs, as a comma-separated list (e.g. 0x370,0x247)",    )	
     args = parser.parse_args()
 
     try:
@@ -114,8 +115,25 @@ def main():
             print(f"ERROR: could not load ID map file '{args.id_map}': {e}", file=sys.stderr)
             sys.exit(1)
 
+    filter_ids = None
+    if args.filter:
+        try:
+            filter_ids = {
+                parse_can_id(id_str)
+                for id_str in args.filter.split(",")
+                if id_str.strip()
+            }
+        except ValueError as e:
+            print(f"ERROR: invalid CAN ID in --filter: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not filter_ids:
+            print("ERROR: --filter requires at least one CAN ID", file=sys.stderr)
+            sys.exit(1)
+
     decoded_rows = []
     total_frames = 0
+    filtered_frames = 0
     decoded_frames = 0
     unknown_ids = set()
     unknown_frames = 0
@@ -149,16 +167,15 @@ def main():
                 frame_id = parse_can_id(id_str)
                 data = parse_data_bytes(data_str)
             except Exception:
-                # Could not even parse the ID/data: keep the line instead of
-                # dropping it silently, labeled UNKNOWN.
                 decode_errors += 1
-                unknown_ids.add(id_str.strip())
-                unknown_frames += 1
-                decoded_rows.append(
-                    (timestamp_ms, id_str.strip(), "UNKNOWN", "PARSE_ERROR", data_str.strip(), "raw")
-                )
                 continue
 
+            # If a CAN ID filter was specified, skip frames not in the filter.
+            if filter_ids is not None and frame_id not in filter_ids:
+                continue
+
+            filtered_frames += 1
+								
             # Extended CAN IDs (29-bit, e.g. 0x7E10824) are stored separately from
             # standard IDs (11-bit, max 0x7FF) inside cantools. If we don't tell it
             # which kind of frame this is, a valid extended ID that IS in the DBC
@@ -200,17 +217,7 @@ def main():
             try:
                 signals = message.decode(data, decode_choices=True, allow_truncated=True)
             except Exception:
-                # The ID matched a DBC message (possibly via the extended/standard
-                # fallback above), but the payload couldn't actually be decoded
-                # -- e.g. a false-positive match on a genuinely unknown frame.
-                # Keep it as UNKNOWN raw data instead of dropping it silently.
                 decode_errors += 1
-                raw_hex = data.hex(" ").upper()
-                unknown_ids.add(id_str.strip())
-                unknown_frames += 1
-                decoded_rows.append(
-                    (timestamp_ms, id_str.strip(), "UNKNOWN", "DECODE_ERROR_RAW_DATA", raw_hex, "hex")
-                )
                 continue
 
             decoded_frames += 1
@@ -225,6 +232,8 @@ def main():
         writer.writerows(decoded_rows)
 
     print(f"Total frames read              : {total_frames}")
+    if filter_ids is not None:
+        print(f"Frames passing ID filter       : {filtered_frames}")
     print(f"Frames decoded (DBC)           : {decoded_frames}")
     print(f"Decode errors                  : {decode_errors}")
     if id_map:
