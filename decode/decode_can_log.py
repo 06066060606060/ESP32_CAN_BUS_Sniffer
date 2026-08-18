@@ -13,7 +13,7 @@ firmware output:
 Lines starting with '#' (comments/status messages) are ignored.
 
 Usage:
-    python decode_can_log.py --dbc mycar.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv can_log.csv --out decoded.csv
+    python decode_can_log.py --dbc Model3CAN.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv LOG.csv --out decoded.csv
 
 Output CSV (long format, one row per decoded signal — safer than a wide
 table since different messages have different signals):
@@ -149,7 +149,14 @@ def main():
                 frame_id = parse_can_id(id_str)
                 data = parse_data_bytes(data_str)
             except Exception:
+                # Could not even parse the ID/data: keep the line instead of
+                # dropping it silently, labeled UNKNOWN.
                 decode_errors += 1
+                unknown_ids.add(id_str.strip())
+                unknown_frames += 1
+                decoded_rows.append(
+                    (timestamp_ms, id_str.strip(), "UNKNOWN", "PARSE_ERROR", data_str.strip(), "raw")
+                )
                 continue
 
             # Extended CAN IDs (29-bit, e.g. 0x7E10824) are stored separately from
@@ -193,7 +200,17 @@ def main():
             try:
                 signals = message.decode(data, decode_choices=True, allow_truncated=True)
             except Exception:
+                # The ID matched a DBC message (possibly via the extended/standard
+                # fallback above), but the payload couldn't actually be decoded
+                # -- e.g. a false-positive match on a genuinely unknown frame.
+                # Keep it as UNKNOWN raw data instead of dropping it silently.
                 decode_errors += 1
+                raw_hex = data.hex(" ").upper()
+                unknown_ids.add(id_str.strip())
+                unknown_frames += 1
+                decoded_rows.append(
+                    (timestamp_ms, id_str.strip(), "UNKNOWN", "DECODE_ERROR_RAW_DATA", raw_hex, "hex")
+                )
                 continue
 
             decoded_frames += 1
