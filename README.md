@@ -1,3 +1,4 @@
+
 # ESP32 CAN BUS Sniffer
 
 An ESP32-S3 CAN bus sniffer for Tesla, exposing captured TWAI/CAN frames through a built-in Wi-Fi access point and a live web interface.
@@ -19,7 +20,8 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Html viewer to read decoded csv (work in progress)
 
   ##
-
+<img width="478" height="472" alt="image" src="https://github.com/user-attachments/assets/77e3305c-420e-4a0f-bfd3-af219cf053bf" />  
+  
 <img width="1408" height="809" alt="log viewer" src="https://github.com/06066060606060/ESP32_CAN_BUS_Sniffer/blob/main/decode/log%20viewer.jpg" />
 
 
