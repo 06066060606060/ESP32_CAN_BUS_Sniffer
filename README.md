@@ -20,7 +20,8 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Html viewer to read decoded csv (work in progress)
 
   ##
-<img width="478" height="472" alt="image" src="https://github.com/user-attachments/assets/77e3305c-420e-4a0f-bfd3-af219cf053bf" />  
+<img width="270" height="485" alt="Capture d’écran 2026-09-02 165739" src="https://github.com/user-attachments/assets/a0c574c3-fb6e-4100-a81d-462b9b92312d" />
+
   
 <img width="1408" height="809" alt="log viewer" src="https://github.com/06066060606060/ESP32_CAN_BUS_Sniffer/blob/main/decode/log%20viewer.jpg" />
 
