@@ -11,6 +11,11 @@
 bool twaiStarted = false;
 
 // ===== Persistent log on SPIFFS (CSV format) =====
+#define LOG_BUTTON_PIN 41
+bool recording = false;
+bool lastButtonState = HIGH;
+unsigned long lastButtonChangeMillis = 0;
+const unsigned long BUTTON_DEBOUNCE_MS = 50;
 const char* LOG_FILE_PATH = "/can_log.csv";
 // NOTE: 'data' = the dlc bytes reported by the controller (unchanged).
 // 'raw8' = ALL 8 bytes of the RX buffer, ALWAYS, regardless of dlc.
@@ -60,6 +65,48 @@ bool ensureLogFileWithHeader() {
   return true;
 }
 
+void flushLogToSPIFFS(bool force);
+void addCanLine(const String& line);
+
+void setRecording(bool enabled) {
+  if (enabled == recording) return;
+
+  if (!enabled) {
+    // Write everything collected while recording before stopping.
+    flushLogToSPIFFS(true);
+  }
+
+  recording = enabled;
+
+  if (recording) {
+    ensureLogFileWithHeader();
+    // Start a fresh recording session in the existing CSV file.
+    // The existing log is preserved; new frames are appended.
+    addCanLine("=== Recording STARTED ===");
+    flushLogToSPIFFS(true);
+  } else {
+    // This message is intentionally not written to the stopped log.
+    canLines[canWriteIndex] = "=== Recording STOPPED ===";
+    canWriteIndex = (canWriteIndex + 1) % MAX_LINES;
+    if (canCount < MAX_LINES) canCount++;
+  }
+}
+
+void toggleRecording() {
+  setRecording(!recording);
+}
+
+void handleRecordStatus() {
+  server.send(200, "application/json; charset=utf-8",
+              String("{\"recording\":") + (recording ? "true" : "false") + "}");
+}
+
+void handleRecordToggle() {
+  toggleRecording();
+  server.send(200, "application/json; charset=utf-8",
+              String("{\"recording\":") + (recording ? "true" : "false") + "}");
+}
+
 void flushLogToSPIFFS(bool force) {
   if (!spiffsOk) return;
   if (pendingBuffer.length() == 0) return;
@@ -101,11 +148,14 @@ void addCanLine(const String& line) {
   canWriteIndex = (canWriteIndex + 1) % MAX_LINES;
   if (canCount < MAX_LINES) canCount++;
 
-  pendingBuffer += "# ";
-  pendingBuffer += line;
-  pendingBuffer += "\n";
-  pendingLines++;
-  flushLogToSPIFFS(false);
+  // Status messages are only persisted while recording.
+  if (recording) {
+    pendingBuffer += "# ";
+    pendingBuffer += line;
+    pendingBuffer += "\n";
+    pendingLines++;
+    flushLogToSPIFFS(false);
+  }
 }
 
 // Parse a CAN ID entered from the dashboard (accepts 0x370 or 370).
@@ -185,10 +235,13 @@ void addCanFrame(uint32_t id, bool extd, bool rtr, uint8_t dlc, const uint8_t* d
     cpos += snprintf(csvLine + cpos, sizeof(csvLine) - cpos, i > 0 ? " %02X" : "%02X", data[i]);
   }
 
-  pendingBuffer += csvLine;
-  pendingBuffer += "\n";
-  pendingLines++;
-  flushLogToSPIFFS(false);
+  // CAN frames are always shown live, but are only persisted while recording.
+  if (recording) {
+    pendingBuffer += csvLine;
+    pendingBuffer += "\n";
+    pendingLines++;
+    flushLogToSPIFFS(false);
+  }
 }
 
 String getCanLog() {
@@ -301,6 +354,40 @@ void handleRoot() {
     .actions {
       display: flex;
       gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .recordStatus {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      font-weight: bold;
+      color: #9fb0c3;
+      padding: 8px 10px;
+      border: 1px solid #2c3440;
+      border-radius: 8px;
+      background: #11161d;
+    }
+    .recordStatus.recording {
+      color: #ff5c5c;
+      border-color: #7a2929;
+    }
+    .recordDot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #68717d;
+    }
+    .recordStatus.recording .recordDot {
+      background: #ff3030;
+      box-shadow: 0 0 8px rgba(255,48,48,.7);
+    }
+    button.recordStart {
+      background: #168a45;
+    }
+    button.recordStart:hover {
+      background: #116b35;
     }
     .filterBox {
       background: #171a21;
@@ -376,6 +463,11 @@ void handleRoot() {
     <div class="top">
       <span>Connected to the ESP32 WiFi</span>
       <div class="actions">
+        <div id="recordStatus" class="recordStatus">
+          <span class="recordDot"></span>
+          <span id="recordStatusText">Stopped</span>
+        </div>
+        <button id="recordBtn" class="recordStart" onclick="toggleRecording()">▶ Start Recording</button>
         <button id="saveBtn" onclick="saveLog()">💾 Download full log (CSV)</button>
         <button id="clearBtn" class="danger" onclick="clearLog()">🗑️ Clear log</button>
       </div>
@@ -398,6 +490,38 @@ void handleRoot() {
   </div>
 
   <script>
+    function updateRecordingUI(isRecording) {
+      const status = document.getElementById('recordStatus');
+      const statusText = document.getElementById('recordStatusText');
+      const btn = document.getElementById('recordBtn');
+
+      status.classList.toggle('recording', isRecording);
+      statusText.textContent = isRecording ? 'Recording' : 'Stopped';
+      btn.textContent = isRecording ? '■ Stop Recording' : '▶ Start Recording';
+      btn.classList.toggle('danger', isRecording);
+      btn.classList.toggle('recordStart', !isRecording);
+    }
+
+    async function refreshRecordingStatus() {
+      try {
+        const r = await fetch('/record/status');
+        const s = await r.json();
+        updateRecordingUI(s.recording);
+      } catch (e) {
+        document.getElementById('recordStatusText').textContent = 'Status error';
+      }
+    }
+
+    async function toggleRecording() {
+      try {
+        const r = await fetch('/record/toggle', { method: 'POST' });
+        const s = await r.json();
+        updateRecordingUI(s.recording);
+      } catch (e) {
+        alert('Error while changing recording state.');
+      }
+    }
+
     async function refreshFilterStatus() {
       try {
         const r = await fetch('/filter/status');
@@ -489,7 +613,9 @@ void handleRoot() {
     }
 
     refreshLog();
+    refreshRecordingStatus();
     setInterval(refreshLog, 500);
+    setInterval(refreshRecordingStatus, 1000);
   </script>
 </body>
 </html>
@@ -556,6 +682,8 @@ void startWebServer() {
   server.on("/can", handleCan);
   server.on("/download", handleDownload);
   server.on("/clear", HTTP_POST, handleClearLog);
+  server.on("/record/status", handleRecordStatus);
+  server.on("/record/toggle", HTTP_POST, handleRecordToggle);
   server.on("/filter", HTTP_POST, handleFilter);
   server.on("/filter/status", handleFilterStatus);
   server.begin();
@@ -601,6 +729,9 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  pinMode(LOG_BUTTON_PIN, INPUT_PULLUP);
+  lastButtonState = digitalRead(LOG_BUTTON_PIN);
+
   spiffsOk = initSPIFFS();
   if (spiffsOk) {
     ensureLogFileWithHeader();
@@ -616,10 +747,27 @@ void setup() {
   startAccessPoint();
   startWebServer();
   startTWAI();
+
+  addCanLine("Recording is STOPPED. Press GPIO 47 button or START in the web interface.");
+}
 }
 
 void loop() {
   server.handleClient();
+
+  // GPIO 47 button: active LOW, toggles recording with debounce.
+  bool buttonState = digitalRead(LOG_BUTTON_PIN);
+  unsigned long now = millis();
+
+  if (buttonState != lastButtonState &&
+      (now - lastButtonChangeMillis) >= BUTTON_DEBOUNCE_MS) {
+    lastButtonChangeMillis = now;
+    lastButtonState = buttonState;
+
+    if (buttonState == LOW) {
+      toggleRecording();
+    }
+  }
 
   if (!twaiStarted) {
     delay(20);
