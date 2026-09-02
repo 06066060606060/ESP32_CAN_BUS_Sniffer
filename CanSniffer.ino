@@ -750,7 +750,7 @@ void setup() {
 
   addCanLine("Recording is STOPPED. Press GPIO 47 button or START in the web interface.");
 }
-}
+
 
 void loop() {
   server.handleClient();
