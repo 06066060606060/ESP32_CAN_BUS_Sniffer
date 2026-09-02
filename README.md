@@ -7,13 +7,13 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 
 ## Features
 
-- ESP32-S3 TWAI (CAN) receiver using the native `driver/twai.h` API.
+- ESP32-S3 TWAI (CAN) receiver using the native `driver/twai.h` API. (Build for AtomS3 with can-base adapter)
 - Listen-only mode for passive sniffing.
 - Built-in Wi-Fi Access Point mode, no external router required.
 - Embedded web server on port 80.
 - Live browser view of recent CAN frames.
 - Simple single-file Arduino sketch, easy to modify.
-- 
+- Presson AtomS3 button to start & stop recording
 - Python script to decodes a CAN log CSV file using a dbc and Tesla CAN Explorer json
 - Usage:  
   `python decode_can_log.py --dbc mycar.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv can_log.csv --out decoded.csv`
