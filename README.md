@@ -13,7 +13,7 @@ This project is designed for **listen-only** CAN monitoring, so it can observe t
 - Embedded web server on port 80.
 - Live browser view of recent CAN frames.
 - Simple single-file Arduino sketch, easy to modify.
-- Presson AtomS3 button to start & stop recording
+- Press AtomS3 button to start & stop recording
 - Python script to decodes a CAN log CSV file using a dbc and Tesla CAN Explorer json
 - Usage:  
   `python decode_can_log.py --dbc mycar.dbc --id-map can_frames_decoded_all_values_mcu3.json --csv can_log.csv --out decoded.csv`
